@@ -41,186 +41,191 @@
 #include <string.h>
 
 namespace port {
-inline void PthreadCall(const char* label, int result) {
-  if (result != 0) {
-    fprintf(stderr, "Error performing %s: %s\n", label, strerror(result));
-    abort();
-  }
+inline void PthreadCall(const char *label, int result) {
+	if (result != 0) {
+		fprintf(stderr, "Error performing %s: %s\n", label, strerror(result));
+		abort();
+	}
 }
 
 class CondVar;
 class Mutex {
- public:
-  Mutex() { PthreadCall("pthread_mutex_init", pthread_mutex_init(&mu_, NULL)); }
-  void Lock() { PthreadCall("pthread_mutex_lock", pthread_mutex_lock(&mu_)); }
-  void Unlock() {
-    PthreadCall("pthread_mutex_unlock", pthread_mutex_unlock(&mu_));
-  }
-  ~Mutex() {
-    PthreadCall("pthread_mutex_destroy", pthread_mutex_destroy(&mu_));
-  }
+public:
+	Mutex() {
+		PthreadCall("pthread_mutex_init", pthread_mutex_init(&mu_, NULL));
+	}
+	void Lock() {
+		PthreadCall("pthread_mutex_lock", pthread_mutex_lock(&mu_));
+	}
+	void Unlock() {
+		PthreadCall("pthread_mutex_unlock", pthread_mutex_unlock(&mu_));
+	}
+	~Mutex() {
+		PthreadCall("pthread_mutex_destroy", pthread_mutex_destroy(&mu_));
+	}
 
- private:
-  friend class CondVar;
-  // No copying
-  void operator=(const Mutex& mu);
-  Mutex(const Mutex&);
+private:
+	friend class CondVar;
+	// No copying
+	void operator=(const Mutex &mu);
+	Mutex(const Mutex &);
 
-  pthread_mutex_t mu_;
+	pthread_mutex_t mu_;
 };
 
 class CondVar {
- public:
-  explicit CondVar(Mutex* mu) : mu_(&mu->mu_) {
-    PthreadCall("pthread_cond_init", pthread_cond_init(&cv_, NULL));
-  }
-  void Wait() {
-    PthreadCall("pthread_cond_wait", pthread_cond_wait(&cv_, mu_));
-  }
-  void SignalAll() {
-    PthreadCall("pthread_cond_broadcast", pthread_cond_broadcast(&cv_));
-  }
-  ~CondVar() {
-    PthreadCall("pthread_cond_destroy", pthread_cond_destroy(&cv_));
-  }
+public:
+	explicit CondVar(Mutex *mu) : mu_(&mu->mu_) {
+		PthreadCall("pthread_cond_init", pthread_cond_init(&cv_, NULL));
+	}
+	void Wait() {
+		PthreadCall("pthread_cond_wait", pthread_cond_wait(&cv_, mu_));
+	}
+	void SignalAll() {
+		PthreadCall("pthread_cond_broadcast", pthread_cond_broadcast(&cv_));
+	}
+	~CondVar() {
+		PthreadCall("pthread_cond_destroy", pthread_cond_destroy(&cv_));
+	}
 
- private:
-  // No copying
-  void operator=(const CondVar& cv);
-  CondVar(const CondVar&);
+private:
+	// No copying
+	void operator=(const CondVar &cv);
+	CondVar(const CondVar &);
 
-  pthread_mutex_t* const mu_;
-  pthread_cond_t cv_;
+	pthread_mutex_t *const mu_;
+	pthread_cond_t cv_;
 };
-}  // namespace port
+} // namespace port
 
 class MutexLock {
- public:
-  explicit MutexLock(port::Mutex* mu) : mu_(mu) { mu_->Lock(); }
-  ~MutexLock() { mu_->Unlock(); }
+public:
+	explicit MutexLock(port::Mutex *mu) : mu_(mu) {
+		mu_->Lock();
+	}
+	~MutexLock() {
+		mu_->Unlock();
+	}
 
- private:
-  // No copying allowed
-  void operator=(const MutexLock& ml);
-  MutexLock(const MutexLock&);
+private:
+	// No copying allowed
+	void operator=(const MutexLock &ml);
+	MutexLock(const MutexLock &);
 
-  port::Mutex* const mu_;
+	port::Mutex *const mu_;
 };
 
 // A simple thread pool implementation with a fixed pool size. Threads keep
 // running until pool destruction.
 class ThreadPool {
- public:
-  explicit ThreadPool(int num_threads, pthread_attr_t* attr = NULL);
-  ~ThreadPool();
-  void Schedule(void (*function)(void*), void* arg);
-  void Resume();
-  void Pause();
+public:
+	ThreadPool(int num_threads, pthread_attr_t *attr = NULL);
+	~ThreadPool();
+	void Schedule(void (*function)(void *), void *arg);
+	void Resume();
+	void Pause();
 
- private:
-  // No copying allowed
-  ThreadPool(const ThreadPool&);
-  void operator=(const ThreadPool& pool);
-  // BGThread() is the body of the background thread
-  void BGThread();
+private:
+	// No copying allowed
+	ThreadPool(const ThreadPool &);
+	void operator=(const ThreadPool &pool);
+	// BGThread() is the body of the background thread
+	void BGThread();
 
-  static void* BGWrapper(void* arg) {
-    reinterpret_cast<ThreadPool*>(arg)->BGThread();
-    return NULL;
-  }
+	static void *BGWrapper(void *arg) {
+		reinterpret_cast<ThreadPool *>(arg)->BGThread();
+		return NULL;
+	}
 
-  port::Mutex mu_;
-  port::CondVar bg_cv_;
-  int num_pool_threads_;  // Currently running
-  int max_threads_;
+	port::Mutex mu_;
+	port::CondVar bg_cv_;
+	int num_pool_threads_; // Currently running
+	int max_threads_;
 
-  bool shutting_down_;
-  bool paused_;
+	bool shutting_down_;
+	bool paused_;
 
-  // Entry per Schedule() call
-  struct BGItem {
-    void* arg;
-    void (*function)(void*);
-  };
-  typedef std::deque<BGItem> BGQueue;
-  BGQueue queue_;
+	// Entry per Schedule() call
+	struct BGItem {
+		void *arg;
+		void (*function)(void *);
+	};
+	typedef std::deque<BGItem> BGQueue;
+	BGQueue queue_;
 };
 
-ThreadPool::ThreadPool(int num_threads, pthread_attr_t* attr)
-    : bg_cv_(&mu_),
-      num_pool_threads_(0),
-      max_threads_(num_threads),
-      shutting_down_(false),
-      paused_(false) {
-  MutexLock ml(&mu_);
-  while (num_pool_threads_ < max_threads_) {
-    pthread_t th;
-    port::PthreadCall("pthread_create",
-                      pthread_create(&th, attr, BGWrapper, this));
-    port::PthreadCall("pthread_detach", pthread_detach(th));
-    num_pool_threads_++;
-  }
+ThreadPool::ThreadPool(int num_threads, pthread_attr_t *attr)
+    : bg_cv_(&mu_), num_pool_threads_(0), max_threads_(num_threads), shutting_down_(false), paused_(false) {
+	MutexLock ml(&mu_);
+	while (num_pool_threads_ < max_threads_) {
+		pthread_t th;
+		port::PthreadCall("pthread_create", pthread_create(&th, attr, BGWrapper, this));
+		port::PthreadCall("pthread_detach", pthread_detach(th));
+		num_pool_threads_++;
+	}
 }
 
 ThreadPool::~ThreadPool() {
-  mu_.Lock();
-  shutting_down_ = true;
-  bg_cv_.SignalAll();
-  while (num_pool_threads_ != 0) {
-    bg_cv_.Wait();
-  }
-  mu_.Unlock();
+	mu_.Lock();
+	shutting_down_ = true;
+	bg_cv_.SignalAll();
+	while (num_pool_threads_ != 0) {
+		bg_cv_.Wait();
+	}
+	mu_.Unlock();
 }
 
-void ThreadPool::Schedule(void (*function)(void*), void* arg) {
-  MutexLock ml(&mu_);
-  if (shutting_down_) return;
-  // If the queue is currently empty, the background threads
-  // may be waiting.
-  if (queue_.empty()) bg_cv_.SignalAll();
+void ThreadPool::Schedule(void (*function)(void *), void *arg) {
+	MutexLock ml(&mu_);
+	if (shutting_down_)
+		return;
+	// If the queue is currently empty, the background threads
+	// may be waiting.
+	if (queue_.empty())
+		bg_cv_.SignalAll();
 
-  // Add to priority queue
-  queue_.push_back(BGItem());
-  queue_.back().function = function;
-  queue_.back().arg = arg;
+	// Add to priority queue
+	queue_.push_back(BGItem());
+	queue_.back().function = function;
+	queue_.back().arg = arg;
 }
 
 void ThreadPool::BGThread() {
-  void (*function)(void*) = NULL;
-  void* arg;
+	void (*function)(void *) = NULL;
+	void *arg;
 
-  while (true) {
-    {
-      MutexLock l(&mu_);
-      // Wait until there is an item that is ready to run
-      while (!shutting_down_ && (paused_ || queue_.empty())) {
-        bg_cv_.Wait();
-      }
-      if (shutting_down_) {
-        assert(num_pool_threads_ > 0);
-        num_pool_threads_--;
-        bg_cv_.SignalAll();
-        return;
-      }
+	while (true) {
+		{
+			MutexLock l(&mu_);
+			// Wait until there is an item that is ready to run
+			while (!shutting_down_ && (paused_ || queue_.empty())) {
+				bg_cv_.Wait();
+			}
+			if (shutting_down_) {
+				assert(num_pool_threads_ > 0);
+				num_pool_threads_--;
+				bg_cv_.SignalAll();
+				return;
+			}
 
-      assert(!queue_.empty());
-      function = queue_.front().function;
-      arg = queue_.front().arg;
-      queue_.pop_front();
-    }
+			assert(!queue_.empty());
+			function = queue_.front().function;
+			arg = queue_.front().arg;
+			queue_.pop_front();
+		}
 
-    assert(function != NULL);
-    function(arg);
-  }
+		assert(function != NULL);
+		function(arg);
+	}
 }
 
 void ThreadPool::Resume() {
-  MutexLock ml(&mu_);
-  paused_ = false;
-  bg_cv_.SignalAll();
+	MutexLock ml(&mu_);
+	paused_ = false;
+	bg_cv_.SignalAll();
 }
 
 void ThreadPool::Pause() {
-  MutexLock ml(&mu_);
-  paused_ = true;
+	MutexLock ml(&mu_);
+	paused_ = true;
 }
