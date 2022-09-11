@@ -7,9 +7,14 @@
 #include "parquet-amalgamation.hpp"
 #endif
 
+#include "pthread-helper.h"
+
 #include <algorithm>
 #include <fcntl.h>
+#include <fstream>
+#include <iostream>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <unordered_map>
@@ -86,11 +91,112 @@ public:
 	}
 };
 
+struct SharedState {
+	duckdb::FileSystem *fs;
+	std::vector<duckdb::column_t> *column_ids;
+	std::vector<duckdb::LogicalType> *return_types;
+	duckdb::TableFilterSet *filters;
+};
+
+class JobScheduler {
+public:
+	JobScheduler(int j, const SharedState &shared);
+	~JobScheduler();
+	void AddTask(const std::string &filename);
+	void Wait();
+
+private:
+	SharedState shared_;
+	static void RunJob(void *);
+	ThreadPool *const pool_;
+	// State below protected by cv_;
+	port::Mutex mu_;
+	port::CondVar cv_;
+	int bg_scheduled_;
+	int bg_completed_;
+};
+
+JobScheduler::JobScheduler(int j, const SharedState &shared)
+    : shared_(shared), pool_(new ThreadPool(j)), cv_(&mu_), bg_scheduled_(0), bg_completed_(0) {
+}
+
+struct Task {
+	JobScheduler *parent;
+	SharedState *shared;
+	std::string filename;
+};
+
+void JobScheduler::AddTask(const std::string &filename) {
+	Task *const t = new Task;
+	t->filename = filename;
+	t->shared = &shared_;
+	t->parent = this;
+	MutexLock ml(&mu_);
+	bg_scheduled_++;
+	pool_->Schedule(RunJob, t);
+}
+
+void Run(const std::string &filename, SharedState *const shared) {
+	std::unique_ptr<duckdb::FileHandle> file = shared->fs->OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
+	duckdb::Allocator allocator;
+	duckdb::ParquetReader reader(allocator, std::move(file));
+	std::vector<idx_t> groups;
+	for (idx_t i = 0; i < reader.NumRowGroups(); i++) {
+		groups.push_back(i);
+	}
+	duckdb::ParquetReaderScanState state;
+	reader.InitializeScan(state, *shared->column_ids, groups, shared->filters);
+	duckdb::DataChunk output;
+	output.Initialize(*shared->return_types);
+	do {
+		output.Reset();
+		reader.Scan(state, output);
+		output.Print();
+	} while (output.size() > 0);
+}
+
+void JobScheduler::RunJob(void *arg) {
+	Task *const t = static_cast<Task *>(arg);
+	JobScheduler *const p = t->parent;
+	Run(t->filename, t->shared);
+	delete t;
+	MutexLock ml(&p->mu_);
+	p->bg_completed_++;
+	p->cv_.SignalAll();
+}
+
+void JobScheduler::Wait() {
+	MutexLock ml(&mu_);
+	while (bg_completed_ < bg_scheduled_) {
+		cv_.Wait();
+	}
+}
+
+JobScheduler::~JobScheduler() {
+	{
+		MutexLock ml(&mu_);
+		while (bg_completed_ < bg_scheduled_) {
+			cv_.Wait();
+		}
+	}
+	delete pool_;
+}
+
 } // namespace
 
+/*
+ * Example: ./parquetclix metadata_file 'ID,x,y,z' ke '>' 0.01 [contain:offset:size] ...
+ */
 int main(int argc, char *argv[]) {
+	if (argc < 2) {
+		fprintf(stderr, "Too few arguments: no metadata input file\n");
+		return -1;
+	}
 	std::string filename(argv[1]);
-
+	if (argc < 3) {
+		fprintf(stderr, "Too few arguments: no column specification\n");
+		return -1;
+	}
 	bool read_all_columns = false;
 	if (std::string(argv[2]) == "*") {
 		read_all_columns = true;
@@ -129,26 +235,48 @@ int main(int argc, char *argv[]) {
 	}
 
 	duckdb::TableFilterSet filters;
-	if (argc >= 4) {
-		std::vector<std::string> splits = duckdb::StringUtil::Split(argv[3], "=");
-		auto entry = name_map.find(splits[0]);
+	if (argc >= 6) {
+		auto entry = name_map.find(argv[3]);
 		if (entry == name_map.end()) {
-			fprintf(stderr, "Column name not found: %s\n", splits[0].c_str());
-			//
+			fprintf(stderr, "Column name not found: %s\n", argv[3]);
+			return -1;
 		}
 		int i = entry->second;
-		auto filter = duckdb::make_unique<duckdb::ConstantFilter>(duckdb::ExpressionType::COMPARE_EQUAL,
-		                                                          duckdb::Value(splits[1]).CastAs(return_types[i]));
+		duckdb::ExpressionType exp;
+		switch (argv[4][0]) {
+		case '>':
+			exp = duckdb::ExpressionType::COMPARE_GREATERTHAN;
+			break;
+		case '=':
+			exp = duckdb::ExpressionType::COMPARE_EQUAL;
+			break;
+		case '<':
+			exp = duckdb::ExpressionType::COMPARE_LESSTHAN;
+			break;
+		default:
+			fprintf(stderr, "Unknown expression: %s\n", argv[4]);
+			return -1;
+		}
+		auto filter = duckdb::make_unique<duckdb::ConstantFilter>(exp, duckdb::Value(argv[5]).CastAs(return_types[i]));
 		filters.filters[i] = std::move(filter);
 	}
 
-	duckdb::ParquetReaderScanState state;
-	reader.InitializeScan(state, column_ids, groups, &filters);
-	duckdb::DataChunk output;
-	output.Initialize(return_types);
-	do {
-		output.Reset();
-		reader.Scan(state, output);
-		output.Print();
-	} while (output.size() > 0);
+	SharedState shared;
+	shared.fs = &fs;
+	shared.column_ids = &column_ids;
+	shared.return_types = &return_types;
+	shared.filters = &filters;
+	JobScheduler scheduler(1, shared);
+	for (int i = 6; i < argc; i++) {
+		if (argv[i][0] != '^') {
+			scheduler.AddTask(argv[i]);
+		} else {
+			std::ifstream in(argv[i] + 1);
+			std::string input;
+			while (in >> input) {
+				scheduler.AddTask(input);
+			}
+		}
+	}
+	scheduler.Wait();
 }
