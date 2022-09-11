@@ -108,6 +108,7 @@ struct SharedState {
 	std::vector<duckdb::LogicalType> *return_types;
 	duckdb::TableFilterSet *filters;
 	ScanState *scan;
+	bool print;
 };
 
 class JobScheduler {
@@ -166,7 +167,9 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 		output.Reset();
 		reader.Scan(state, output);
 		hits += output.size();
-		output.Print();
+		if (shared->print && output.size() > 0) {
+			output.Print();
+		}
 	} while (output.size() > 0);
 	scan->n += groups.size();
 	scan->reads += static_cast<DeviceFileWrapper *>(state.file_handle.get())->reads;
@@ -298,18 +301,28 @@ int main(int argc, char *argv[]) {
 
 	ScanState scan;
 	memset(&scan, 0, sizeof(scan));
+	int print = 1;
+	{
+		const char *env = getenv("Env_print");
+		if (env && env[0]) {
+			print = atoi(env);
+		}
+	}
 	SharedState shared;
 	shared.fs = &fs;
 	shared.column_ids = &column_ids;
 	shared.return_types = &return_types;
 	shared.filters = &filters;
 	shared.scan = &scan;
+	shared.print = print;
 	int j = 32;
-	const char *env = getenv("Env_jobs");
-	if (env && env[0]) {
-		j = atoi(env);
-		if (j < 1) {
-			j = 1;
+	{
+		const char *env = getenv("Env_jobs");
+		if (env && env[0]) {
+			j = atoi(env);
+			if (j < 1) {
+				j = 1;
+			}
 		}
 	}
 	JobScheduler scheduler(j, shared);
@@ -328,6 +341,7 @@ int main(int argc, char *argv[]) {
 	if (argc >= 6) {
 		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
 	}
+	fprintf(stderr, "Print results: %d\n", print);
 	fprintf(stderr, "Threads: %d\n", j);
 	fprintf(stderr, "Total reads: %llu\n", static_cast<unsigned long long>(scan.reads));
 	fprintf(stderr, "Total bytes read: %llu\n", static_cast<unsigned long long>(scan.bytes_read));
