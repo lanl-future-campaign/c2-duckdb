@@ -23,7 +23,7 @@ namespace {
 
 struct DeviceFileWrapper : public duckdb::FileHandle {
 	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, int fd, int64_t offset, int64_t size)
-	    : FileHandle(file_system, path), fd(fd), offset(offset), size(size) {
+	    : FileHandle(file_system, path), fd(fd), offset(offset), size(size), reads(0), bytes_read(0) {
 	}
 	~DeviceFileWrapper() override {
 		Close();
@@ -32,6 +32,8 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	int fd;
 	int64_t offset;
 	int64_t size;
+	uint64_t reads;      // Number of read invocations
+	uint64_t bytes_read; // Number of bytes read from the file
 
 	void Close() override {
 		if (fd != -1) {
@@ -76,6 +78,8 @@ public:
 			                          "wanted=%lld read=%lld",
 			                          handle.path, nr_bytes, bytes_read);
 		}
+		static_cast<DeviceFileWrapper &>(handle).bytes_read += bytes_read;
+		static_cast<DeviceFileWrapper &>(handle).reads++;
 	}
 
 	bool CanSeek() override {
@@ -91,12 +95,19 @@ public:
 	}
 };
 
+struct ScanState {
+	uint64_t reads;
+	uint64_t bytes_read;
+	uint64_t hits;
+	uint64_t n;
+};
+
 struct SharedState {
 	duckdb::FileSystem *fs;
 	std::vector<duckdb::column_t> *column_ids;
 	std::vector<duckdb::LogicalType> *return_types;
 	duckdb::TableFilterSet *filters;
-	uint64_t *hits;
+	ScanState *scan;
 };
 
 class JobScheduler {
@@ -137,7 +148,7 @@ void JobScheduler::AddTask(const std::string &filename) {
 	pool_->Schedule(RunJob, t);
 }
 
-uint64_t Run(const std::string &filename, SharedState *const shared) {
+void Run(const std::string &filename, ScanState *const scan, SharedState *const shared) {
 
 	std::unique_ptr<duckdb::FileHandle> file = shared->fs->OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
 	duckdb::Allocator allocator;
@@ -157,25 +168,32 @@ uint64_t Run(const std::string &filename, SharedState *const shared) {
 		hits += output.size();
 		output.Print();
 	} while (output.size() > 0);
-	return hits;
+	scan->n += groups.size();
+	scan->reads += static_cast<DeviceFileWrapper *>(state.file_handle.get())->reads;
+	scan->bytes_read += static_cast<DeviceFileWrapper *>(state.file_handle.get())->bytes_read;
+	scan->hits += hits;
 }
 
-uint64_t TryRun(const std::string &filename, SharedState *shared) {
+void TryRun(const std::string &filename, ScanState *scan, SharedState *shared) {
 	try {
-		return Run(filename, shared);
+		Run(filename, scan, shared);
 	} catch (const std::exception &e) {
 		fprintf(stderr, "ERROR scanning %s: %s\n", filename.c_str(), e.what());
-		return 0;
 	}
 }
 
 void JobScheduler::RunJob(void *arg) {
 	Task *const t = static_cast<Task *>(arg);
 	JobScheduler *const p = t->parent;
-	const uint64_t hits = TryRun(t->filename, t->shared);
+	ScanState scan;
+	memset(&scan, 0, sizeof(scan));
+	TryRun(t->filename, &scan, t->shared);
 	{
 		MutexLock ml(&p->mu_);
-		*t->shared->hits += hits;
+		t->shared->scan->reads += scan.reads;
+		t->shared->scan->bytes_read += scan.bytes_read;
+		t->shared->scan->hits += scan.hits;
+		t->shared->scan->n += scan.n;
 		p->bg_completed_++;
 		p->cv_.SignalAll();
 	}
@@ -278,13 +296,14 @@ int main(int argc, char *argv[]) {
 		filters.filters[i] = std::move(filter);
 	}
 
-	uint64_t hits = 0;
+	ScanState scan;
+	memset(&scan, 0, sizeof(scan));
 	SharedState shared;
 	shared.fs = &fs;
 	shared.column_ids = &column_ids;
 	shared.return_types = &return_types;
 	shared.filters = &filters;
-	shared.hits = &hits;
+	shared.scan = &scan;
 	JobScheduler scheduler(32, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
@@ -298,5 +317,8 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	scheduler.Wait();
-	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(hits));
+	fprintf(stderr, "Total reads: %llu\n", static_cast<unsigned long long>(scan.reads));
+	fprintf(stderr, "Total bytes read: %llu\n", static_cast<unsigned long long>(scan.bytes_read));
+	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
+	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
 }
