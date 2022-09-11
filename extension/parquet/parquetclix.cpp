@@ -155,10 +155,18 @@ void Run(const std::string &filename, SharedState *const shared) {
 	} while (output.size() > 0);
 }
 
+void TryRun(const std::string &filename, SharedState *shared) {
+	try {
+		Run(filename, shared);
+	} catch (const std::exception &e) {
+		fprintf(stderr, "ERROR scanning %s: %s\n", filename.c_str(), e.what());
+	}
+}
+
 void JobScheduler::RunJob(void *arg) {
 	Task *const t = static_cast<Task *>(arg);
 	JobScheduler *const p = t->parent;
-	Run(t->filename, t->shared);
+	TryRun(t->filename, t->shared);
 	delete t;
 	MutexLock ml(&p->mu_);
 	p->bg_completed_++;
