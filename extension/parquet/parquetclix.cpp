@@ -96,6 +96,7 @@ struct SharedState {
 	std::vector<duckdb::column_t> *column_ids;
 	std::vector<duckdb::LogicalType> *return_types;
 	duckdb::TableFilterSet *filters;
+	uint64_t *hits;
 };
 
 class JobScheduler {
@@ -136,7 +137,8 @@ void JobScheduler::AddTask(const std::string &filename) {
 	pool_->Schedule(RunJob, t);
 }
 
-void Run(const std::string &filename, SharedState *const shared) {
+uint64_t Run(const std::string &filename, SharedState *const shared) {
+
 	std::unique_ptr<duckdb::FileHandle> file = shared->fs->OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
 	duckdb::Allocator allocator;
 	duckdb::ParquetReader reader(allocator, std::move(file));
@@ -148,29 +150,36 @@ void Run(const std::string &filename, SharedState *const shared) {
 	reader.InitializeScan(state, *shared->column_ids, groups, shared->filters);
 	duckdb::DataChunk output;
 	output.Initialize(*shared->return_types);
+	uint64_t hits = 0;
 	do {
 		output.Reset();
 		reader.Scan(state, output);
+		hits += output.size();
 		output.Print();
 	} while (output.size() > 0);
+	return hits;
 }
 
-void TryRun(const std::string &filename, SharedState *shared) {
+uint64_t TryRun(const std::string &filename, SharedState *shared) {
 	try {
-		Run(filename, shared);
+		return Run(filename, shared);
 	} catch (const std::exception &e) {
 		fprintf(stderr, "ERROR scanning %s: %s\n", filename.c_str(), e.what());
+		return 0;
 	}
 }
 
 void JobScheduler::RunJob(void *arg) {
 	Task *const t = static_cast<Task *>(arg);
 	JobScheduler *const p = t->parent;
-	TryRun(t->filename, t->shared);
+	const uint64_t hits = TryRun(t->filename, t->shared);
+	{
+		MutexLock ml(&p->mu_);
+		*t->shared->hits += hits;
+		p->bg_completed_++;
+		p->cv_.SignalAll();
+	}
 	delete t;
-	MutexLock ml(&p->mu_);
-	p->bg_completed_++;
-	p->cv_.SignalAll();
 }
 
 void JobScheduler::Wait() {
@@ -269,11 +278,13 @@ int main(int argc, char *argv[]) {
 		filters.filters[i] = std::move(filter);
 	}
 
+	uint64_t hits = 0;
 	SharedState shared;
 	shared.fs = &fs;
 	shared.column_ids = &column_ids;
 	shared.return_types = &return_types;
 	shared.filters = &filters;
+	shared.hits = &hits;
 	JobScheduler scheduler(32, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
@@ -287,4 +298,5 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	scheduler.Wait();
+	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(hits));
 }
