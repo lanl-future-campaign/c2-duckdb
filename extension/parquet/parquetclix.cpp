@@ -304,7 +304,15 @@ int main(int argc, char *argv[]) {
 	shared.return_types = &return_types;
 	shared.filters = &filters;
 	shared.scan = &scan;
-	JobScheduler scheduler(32, shared);
+	int j = 32;
+	const char *env = getenv("Env_jobs");
+	if (env && env[0]) {
+		j = atoi(env);
+		if (j < 1) {
+			j = 1;
+		}
+	}
+	JobScheduler scheduler(j, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
 			scheduler.AddTask(argv[i]);
@@ -317,6 +325,10 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	scheduler.Wait();
+	if (argc >= 6) {
+		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
+	}
+	fprintf(stderr, "Threads: %d\n", j);
 	fprintf(stderr, "Total reads: %llu\n", static_cast<unsigned long long>(scan.reads));
 	fprintf(stderr, "Total bytes read: %llu\n", static_cast<unsigned long long>(scan.bytes_read));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
