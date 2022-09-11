@@ -266,7 +266,7 @@ int main(int argc, char *argv[]) {
 	shared.column_ids = &column_ids;
 	shared.return_types = &return_types;
 	shared.filters = &filters;
-	JobScheduler scheduler(1, shared);
+	JobScheduler scheduler(32, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
 			scheduler.AddTask(argv[i]);
