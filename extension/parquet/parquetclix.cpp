@@ -1,5 +1,6 @@
 #include "duckdb.hpp"
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/serializer/buffered_serializer.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
 #include "parquet_reader.hpp"
@@ -98,6 +99,7 @@ public:
 struct ScanState {
 	uint64_t reads;
 	uint64_t bytes_read;
+	uint64_t bytes_printed;
 	uint64_t hits;
 	uint64_t n;
 };
@@ -162,13 +164,25 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 	reader.InitializeScan(state, *shared->column_ids, groups, shared->filters);
 	duckdb::DataChunk output;
 	output.Initialize(*shared->return_types);
+	duckdb::BufferedSerializer ser(1024 * 1024);
 	uint64_t hits = 0;
 	do {
 		output.Reset();
 		reader.Scan(state, output);
 		hits += output.size();
 		if (shared->print && output.size() > 0) {
-			output.Print();
+			if (1) {
+				// output.Serialize(ser);
+				for (idx_t i = 0; i < output.ColumnCount(); i++) {
+					output.data[i].Serialize(output.size(), ser);
+				}
+				fwrite(ser.blob.data.get(), ser.blob.size, 1, stdout);
+				scan->bytes_printed += ser.blob.size;
+				fflush(stdout);
+				ser.Reset();
+			} else {
+				output.Print();
+			}
 		}
 	} while (output.size() > 0);
 	scan->n += groups.size();
@@ -195,6 +209,7 @@ void JobScheduler::RunJob(void *arg) {
 		MutexLock ml(&p->mu_);
 		t->shared->scan->reads += scan.reads;
 		t->shared->scan->bytes_read += scan.bytes_read;
+		t->shared->scan->bytes_printed += scan.bytes_printed;
 		t->shared->scan->hits += scan.hits;
 		t->shared->scan->n += scan.n;
 		p->bg_completed_++;
@@ -345,6 +360,7 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Threads: %d\n", j);
 	fprintf(stderr, "Total reads: %llu\n", static_cast<unsigned long long>(scan.reads));
 	fprintf(stderr, "Total bytes read: %llu\n", static_cast<unsigned long long>(scan.bytes_read));
+	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
 	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
 }
