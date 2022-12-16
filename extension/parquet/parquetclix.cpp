@@ -373,4 +373,5 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
 	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
+	return 0;
 }
