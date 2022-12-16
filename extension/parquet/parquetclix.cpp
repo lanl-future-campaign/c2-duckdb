@@ -1,5 +1,6 @@
 #include "duckdb.hpp"
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/printer.hpp"
 #include "duckdb/common/serializer/buffered_serializer.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -182,7 +183,9 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 				fflush(stdout);
 				ser.Reset();
 			} else {
-				output.Print();
+				std::string out = output.ToString();
+				duckdb::Printer::Print(out);
+				scan->bytes_printed += out.size();
 			}
 		}
 	} while (output.size() > 0);
