@@ -110,6 +110,7 @@ struct SharedState {
 	std::vector<duckdb::LogicalType> *return_types;
 	duckdb::TableFilterSet *filters;
 	ScanState *scan;
+	bool print_binary;
 	bool print;
 };
 
@@ -171,7 +172,7 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 		reader.Scan(state, output);
 		hits += output.size();
 		if (shared->print && output.size() > 0) {
-			if (1) {
+			if (shared->print_binary) {
 				// output.Serialize(ser);
 				for (idx_t i = 0; i < output.ColumnCount(); i++) {
 					output.data[i].Serialize(output.size(), ser);
@@ -316,6 +317,14 @@ int main(int argc, char *argv[]) {
 
 	ScanState scan;
 	memset(&scan, 0, sizeof(scan));
+	// Print in raw binary format without converting to human friendly strings
+	int print_binary = 1;
+	{
+		const char *env = getenv("Env_print_binary");
+		if (env && env[0]) {
+			print_binary = atoi(env);
+		}
+	}
 	int print = 1;
 	{
 		const char *env = getenv("Env_print");
@@ -329,6 +338,7 @@ int main(int argc, char *argv[]) {
 	shared.return_types = &return_types;
 	shared.filters = &filters;
 	shared.scan = &scan;
+	shared.print_binary = print_binary;
 	shared.print = print;
 	int j = 32;
 	{
