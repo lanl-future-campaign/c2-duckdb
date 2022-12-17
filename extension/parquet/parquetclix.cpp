@@ -415,6 +415,7 @@ int main(int argc, char *argv[]) {
 #endif
 		}
 	}
+	const uint64_t start = CurrentMicros();
 	JobScheduler scheduler(j, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
@@ -428,9 +429,11 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	scheduler.Wait();
+	const uint64_t end = CurrentMicros();
 	if (argc >= 6) {
 		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
 	}
+	fprintf(stderr, "Query time: %.2f s\n", double(end - start) / 1000000);
 	fprintf(stderr, "Print results: %d\n", print);
 	if (print)
 		fprintf(stderr, "Print in binary form: %d\n", print_binary);
