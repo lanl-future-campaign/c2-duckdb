@@ -371,7 +371,7 @@ int main(int argc, char *argv[]) {
 				diskstats.emplace(disk, stats);
 			}
 #else
-			fprintf(stderr, "WARN: disk stats mon disabled\n");
+			fprintf(stderr, "WARN: disk stats mon not enabled\n");
 #endif
 		}
 	}
@@ -417,9 +417,9 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "%s_read_ticks: %lld ms\n", path, diff);
 			total_ticks += diff;
 		}
-		fprintf(stderr, "Total_read_ops: %lld\n", diff);
-		fprintf(stderr, "Total_read_sectors: %lld\n", diff);
-		fprintf(stderr, "Total_read_ticks: %lld ms\n", diff);
+		fprintf(stderr, "Total_read_ops: %lld\n", total_ops);
+		fprintf(stderr, "Total_read_sectors: %lld\n", total_sectors);
+		fprintf(stderr, "Total_read_ticks: %lld ms\n", total_ticks);
 #endif
 	}
 	return 0;
