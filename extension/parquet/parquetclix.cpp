@@ -9,12 +9,15 @@
 #include "parquet-amalgamation.hpp"
 #endif
 
+#include "iostats.h"
 #include "pthread-helper.h"
+#include "time.h"
 
 #include <algorithm>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -353,6 +356,25 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
+	std::map<std::string, struct iostats> diskstats;
+	{
+		const char *env = getenv("Env_mon_disks");
+		if (env && env[0]) {
+#ifdef __linux__
+			std::vector<std::string> disks = duckdb::StringUtil::Split(env, ",");
+			for (const auto &disk : disks) {
+				char path[50];
+				snprintf(path, sizeof(path), "/sys/block/%s/stat", disk.c_str());
+				struct iostats stats;
+				memset(&stats, 0, sizeof(stats));
+				GetDiskStats(path, &stats);
+				diskstats.emplace(disk, stats);
+			}
+#else
+			fprintf(stderr, "WARN: disk stats mon disabled\n");
+#endif
+		}
+	}
 	JobScheduler scheduler(j, shared);
 	for (int i = 6; i < argc; i++) {
 		if (argv[i][0] != '^') {
@@ -376,5 +398,29 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
 	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
+	{
+#ifdef __linux__
+		long long total_ops = 0, total_sectors = 0, total_ticks = 0, diff = 0;
+		for (const auto &it : diskstats) {
+			char path[50];
+			snprintf(path, sizeof(path), "/sys/block/%s/stat", it.first.c_str());
+			struct iostats stats;
+			memset(&stats, 0, sizeof(stats));
+			GetDiskStats(path, &stats);
+			diff = stats.read_ops - it.second.read_ops;
+			fprintf(stderr, "%s_read_ops: %lld\n", path, diff);
+			total_ops += diff;
+			diff = stats.read_sectors - it.second.read_sectors;
+			fprintf(stderr, "%s_read_sectors: %lld\n", path, diff);
+			total_sectors += diff;
+			diff = stats.read_ticks - it.second.read_ticks;
+			fprintf(stderr, "%s_read_ticks: %lld ms\n", path, diff);
+			total_ticks += diff;
+		}
+		fprintf(stderr, "Total_read_ops: %lld\n", diff);
+		fprintf(stderr, "Total_read_sectors: %lld\n", diff);
+		fprintf(stderr, "Total_read_ticks: %lld ms\n", diff);
+#endif
+	}
 	return 0;
 }
