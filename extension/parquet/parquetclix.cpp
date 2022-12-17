@@ -101,6 +101,8 @@ public:
 };
 
 struct ScanState {
+	uint64_t meta_reads;
+	uint64_t meta_bytes_read;
 	uint64_t reads;
 	uint64_t bytes_read;
 	uint64_t bytes_printed;
@@ -159,6 +161,8 @@ void JobScheduler::AddTask(const std::string &filename) {
 void Run(const std::string &filename, ScanState *const scan, SharedState *const shared) {
 
 	std::unique_ptr<duckdb::FileHandle> file = shared->fs->OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
+	// Obtain a ref to the file before giving it to the reader so that we can collect its statistics later
+	duckdb::FileHandle *const root_file = file.get();
 	duckdb::Allocator allocator;
 	duckdb::ParquetReader reader(allocator, std::move(file));
 	std::vector<idx_t> groups;
@@ -192,10 +196,12 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 			}
 		}
 	} while (output.size() > 0);
-	scan->n += groups.size();
-	scan->reads += static_cast<DeviceFileWrapper *>(state.file_handle.get())->reads;
-	scan->bytes_read += static_cast<DeviceFileWrapper *>(state.file_handle.get())->bytes_read;
-	scan->hits += hits;
+	scan->n = groups.size();
+	scan->meta_reads = static_cast<DeviceFileWrapper *>(root_file)->reads;
+	scan->meta_bytes_read = static_cast<DeviceFileWrapper *>(root_file)->bytes_read;
+	scan->reads = static_cast<DeviceFileWrapper *>(state.file_handle.get())->reads;
+	scan->bytes_read = static_cast<DeviceFileWrapper *>(state.file_handle.get())->bytes_read;
+	scan->hits = hits;
 }
 
 void TryRun(const std::string &filename, ScanState *scan, SharedState *shared) {
@@ -214,6 +220,8 @@ void JobScheduler::RunJob(void *arg) {
 	TryRun(t->filename, &scan, t->shared);
 	{
 		MutexLock ml(&p->mu_);
+		t->shared->scan->meta_reads += scan.meta_reads;
+		t->shared->scan->meta_bytes_read += scan.meta_bytes_read;
 		t->shared->scan->reads += scan.reads;
 		t->shared->scan->bytes_read += scan.bytes_read;
 		t->shared->scan->bytes_printed += scan.bytes_printed;
@@ -320,9 +328,6 @@ int main(int argc, char *argv[]) {
 		auto filter = duckdb::make_unique<duckdb::ConstantFilter>(exp, duckdb::Value(argv[5]).CastAs(return_types[i]));
 		filters.filters[i] = std::move(filter);
 	}
-
-	ScanState scan;
-	memset(&scan, 0, sizeof(scan));
 	// Print in raw binary format without converting to human friendly strings
 	int print_binary = 1;
 	{
@@ -338,6 +343,8 @@ int main(int argc, char *argv[]) {
 			print = atoi(env);
 		}
 	}
+	ScanState scan;
+	memset(&scan, 0, sizeof(scan));
 	SharedState shared;
 	shared.fs = &fs;
 	shared.column_ids = &column_ids;
@@ -392,7 +399,11 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
 	}
 	fprintf(stderr, "Print results: %d\n", print);
+	if (print)
+		fprintf(stderr, "Print in binary form: %d\n", print_binary);
 	fprintf(stderr, "Threads: %d\n", j);
+	fprintf(stderr, "Total meta reads: %llu\n", static_cast<unsigned long long>(scan.meta_reads));
+	fprintf(stderr, "Total meta bytes read: %llu\n", static_cast<unsigned long long>(scan.meta_bytes_read));
 	fprintf(stderr, "Total reads: %llu\n", static_cast<unsigned long long>(scan.reads));
 	fprintf(stderr, "Total bytes read: %llu\n", static_cast<unsigned long long>(scan.bytes_read));
 	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
