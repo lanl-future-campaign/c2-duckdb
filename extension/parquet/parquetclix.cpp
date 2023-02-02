@@ -134,6 +134,7 @@ public:
 };
 
 struct ScanState {
+	double math_sum;
 	uint64_t meta_reads;
 	uint64_t meta_bytes_read;
 	uint64_t reads;
@@ -151,6 +152,7 @@ struct SharedState {
 	ScanState *scan;
 	bool print_binary;
 	bool print;
+	bool sum;
 };
 
 class JobScheduler {
@@ -208,16 +210,26 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 	output.Initialize(*shared->return_types);
 	duckdb::BufferedSerializer ser(1024 * 1024);
 	uint64_t hits = 0;
+	float sum = 0;
 	do {
 		output.Reset();
 		reader.Scan(state, output);
-		if (output.size() > 0) {
-			hits += output.size();
-			if (shared->print) {
+		const uint64_t n = output.size();
+		if (n) {
+			hits += n;
+			if (shared->sum) {
+				auto &col = output.data[output.ColumnCount() - 1];
+				duckdb::VectorData vdata;
+				col.Orrify(n, vdata);
+				float *data = (float *)vdata.data;
+				for (uint64_t i = 0; i < n; i++) {
+					sum += data[i];
+				}
+			} else if (shared->print) {
 				if (shared->print_binary) {
 					// output.Serialize(ser);
 					for (idx_t i = 0; i < output.ColumnCount(); i++) {
-						output.data[i].Serialize(output.size(), ser);
+						output.data[i].Serialize(n, ser);
 					}
 					fwrite(ser.blob.data.get(), ser.blob.size, 1, stdout);
 					scan->bytes_printed += ser.blob.size;
@@ -239,6 +251,7 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 	scan->reads = static_cast<DeviceFileWrapper *>(state.file_handle.get())->reads;
 	scan->bytes_read = static_cast<DeviceFileWrapper *>(state.file_handle.get())->bytes_read;
 	scan->hits = hits;
+	scan->math_sum += sum;
 }
 
 void TryRun(const std::string &filename, ScanState *scan, SharedState *shared) {
@@ -263,6 +276,7 @@ void JobScheduler::RunJob(void *arg) {
 		t->shared->scan->bytes_read += scan.bytes_read;
 		t->shared->scan->bytes_printed += scan.bytes_printed;
 		t->shared->scan->hits += scan.hits;
+		t->shared->scan->math_sum += scan.math_sum;
 		t->shared->scan->n += scan.n;
 		p->bg_completed_++;
 		p->cv_.SignalAll();
@@ -380,6 +394,13 @@ int main(int argc, char *argv[]) {
 			print = atoi(env);
 		}
 	}
+	int sum = 0;
+	{
+		const char *env = getenv("Env_sum");
+		if (env && env[0]) {
+			sum = atoi(env);
+		}
+	}
 	ScanState scan;
 	memset(&scan, 0, sizeof(scan));
 	SharedState shared;
@@ -390,6 +411,7 @@ int main(int argc, char *argv[]) {
 	shared.scan = &scan;
 	shared.print_binary = print_binary;
 	shared.print = print;
+	shared.sum = sum;
 	int j = 32;
 	{
 		const char *env = getenv("Env_jobs");
@@ -438,9 +460,12 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
 	}
 	fprintf(stderr, "Query time: %.2f s\n", double(end - start) / 1000000);
-	fprintf(stderr, "Print results: %d\n", print);
-	if (print)
+	if (sum)
+		fprintf(stderr, "Exec sum(ke): %d\n", sum);
+	if (print) {
+		fprintf(stderr, "Print results: %d\n", print);
 		fprintf(stderr, "Print in binary form: %d\n", print_binary);
+	}
 	fprintf(stderr, "Threads: %d\n", j);
 	fprintf(stderr, "Total meta reads: %llu\n", static_cast<unsigned long long>(scan.meta_reads));
 	fprintf(stderr, "Total meta bytes read: %llu\n", static_cast<unsigned long long>(scan.meta_bytes_read));
@@ -449,6 +474,7 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
 	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
+	fprintf(stderr, "Match sum: %.3f\n", scan.math_sum);
 	{
 #ifdef __linux__
 		long long total_ops = 0, total_sectors = 0, total_ticks = 0, diff = 0;
