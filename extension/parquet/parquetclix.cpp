@@ -474,7 +474,7 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Total bytes printed to stdout: %llu\n", static_cast<unsigned long long>(scan.bytes_printed));
 	fprintf(stderr, "Total hits: %llu\n", static_cast<unsigned long long>(scan.hits));
 	fprintf(stderr, "Total row groups scanned: %llu\n", static_cast<unsigned long long>(scan.n));
-	fprintf(stderr, "Match sum: %.3f\n", scan.math_sum);
+	fprintf(stderr, "Math sum: %.3f\n", scan.math_sum);
 	{
 #ifdef __linux__
 		long long total_ops = 0, total_sectors = 0, total_ticks = 0, diff = 0;
