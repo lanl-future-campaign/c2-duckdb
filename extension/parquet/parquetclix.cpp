@@ -211,24 +211,28 @@ void Run(const std::string &filename, ScanState *const scan, SharedState *const 
 	do {
 		output.Reset();
 		reader.Scan(state, output);
-		hits += output.size();
-		if (shared->print && output.size() > 0) {
-			if (shared->print_binary) {
-				// output.Serialize(ser);
-				for (idx_t i = 0; i < output.ColumnCount(); i++) {
-					output.data[i].Serialize(output.size(), ser);
+		if (output.size() > 0) {
+			hits += output.size();
+			if (shared->print) {
+				if (shared->print_binary) {
+					// output.Serialize(ser);
+					for (idx_t i = 0; i < output.ColumnCount(); i++) {
+						output.data[i].Serialize(output.size(), ser);
+					}
+					fwrite(ser.blob.data.get(), ser.blob.size, 1, stdout);
+					scan->bytes_printed += ser.blob.size;
+					fflush(stdout);
+					ser.Reset();
+				} else {
+					std::string out = output.ToString();
+					duckdb::Printer::Print(out);
+					scan->bytes_printed += out.size();
 				}
-				fwrite(ser.blob.data.get(), ser.blob.size, 1, stdout);
-				scan->bytes_printed += ser.blob.size;
-				fflush(stdout);
-				ser.Reset();
-			} else {
-				std::string out = output.ToString();
-				duckdb::Printer::Print(out);
-				scan->bytes_printed += out.size();
 			}
+		} else {
+			break;
 		}
-	} while (output.size() > 0);
+	} while (1);
 	scan->n = groups.size();
 	scan->meta_reads = static_cast<DeviceFileWrapper *>(root_file)->reads;
 	scan->meta_bytes_read = static_cast<DeviceFileWrapper *>(root_file)->bytes_read;
