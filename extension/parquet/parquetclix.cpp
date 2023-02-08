@@ -82,6 +82,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	};
 };
 
+template <uint64_t FLAGS_footer_size = 1 << 10, bool FLAGS_disable_cache = false>
 class DeviceFileSystem : public duckdb::FileSystem {
 public:
 	std::unique_ptr<duckdb::FileHandle> OpenFile(const std::string &path, uint8_t flags,
@@ -108,6 +109,22 @@ public:
 	}
 
 	void Read(duckdb::FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override {
+		if (static_cast<DeviceFileWrapper &>(handle).id >= 0) {
+			uint64_t footer_cache_offset = static_cast<DeviceFileWrapper &>(handle).id * FLAGS_footer_size;
+			if (FLAGS_disable_cache) {
+				// Skip
+			} else if (location < static_cast<DeviceFileWrapper &>(handle).size - FLAGS_footer_size) {
+				// Non-footer reads
+			} else if (footer_cache.size() < footer_cache_offset + FLAGS_footer_size) {
+				// No cache available
+			} else {
+				memcpy(buffer,
+				       &footer_cache[0] + footer_cache_offset + location -
+				           static_cast<DeviceFileWrapper &>(handle).size + FLAGS_footer_size,
+				       nr_bytes);
+				return;
+			}
+		}
 		int fd = static_cast<DeviceFileWrapper &>(handle).fd;
 		int64_t offset = static_cast<DeviceFileWrapper &>(handle).offset;
 		int64_t bytes_read = pread(fd, buffer, nr_bytes, location + offset);
@@ -134,6 +151,9 @@ public:
 	std::string GetName() const override {
 		return "ReadonlyDeviceFileSystem";
 	}
+
+private:
+	std::string footer_cache;
 };
 
 struct ScanState {
@@ -325,7 +345,7 @@ int main(int argc, char *argv[]) {
 	std::vector<std::string> column_names = duckdb::StringUtil::Split(argv[2], ",");
 
 	duckdb::Allocator allocator;
-	DeviceFileSystem fs;
+	DeviceFileSystem<> fs;
 	std::unique_ptr<duckdb::FileHandle> file = fs.OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
 	duckdb::ParquetReader reader(allocator, std::move(file));
 	//-----------------
