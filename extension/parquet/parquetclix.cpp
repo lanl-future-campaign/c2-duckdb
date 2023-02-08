@@ -47,6 +47,7 @@
 #include "time.h"
 
 #include <algorithm>
+#include <errno.h>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -54,6 +55,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <unordered_map>
 
@@ -94,11 +96,11 @@ public:
 		int64_t size;
 		if (parameters.size() < 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
 		    (size = atoll(parameters[2].c_str())) < 0) {
-			throw duckdb::IOException("Invalid file name \"%s\"", path);
+			throw duckdb::IOException("Invalid file name %s", path);
 		}
 		int fd = open(parameters[0].c_str(), O_RDONLY);
 		if (fd == -1) {
-			throw duckdb::IOException("Cannot open file \"%s\": %s", path, strerror(errno));
+			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
 		return duckdb::make_unique<DeviceFileWrapper>(*this, path, fd, offset, size,
 		                                              parameters.size() > 3 ? atoll(parameters[3].c_str()) : -1);
@@ -129,12 +131,11 @@ public:
 		int64_t offset = static_cast<DeviceFileWrapper &>(handle).offset;
 		int64_t bytes_read = pread(fd, buffer, nr_bytes, location + offset);
 		if (bytes_read == -1) {
-			throw duckdb::IOException("Could not read from file \"%s\": %s", handle.path, strerror(errno));
+			throw duckdb::IOException("Could not read from file %s: %s", handle.path, strerror(errno));
 		}
 		if (bytes_read != nr_bytes) {
-			throw duckdb::IOException("Could not read all bytes from file \"%s\": "
-			                          "wanted=%lld read=%lld",
-			                          handle.path, nr_bytes, bytes_read);
+			throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld", handle.path,
+			                          nr_bytes, bytes_read);
 		}
 		static_cast<DeviceFileWrapper &>(handle).bytes_read += bytes_read;
 		static_cast<DeviceFileWrapper &>(handle).reads++;
@@ -152,7 +153,42 @@ public:
 		return "ReadonlyDeviceFileSystem";
 	}
 
+	void LoadCache(const std::string *srcs, size_t n) {
+		for (int i = 0; i < n; i++) {
+			LoadCacheFromSource(srcs[i]);
+		}
+	}
+
 private:
+	void LoadCacheFromSource(const std::string &path) {
+		std::vector<std::string> parameters = duckdb::StringUtil::Split(path, ":");
+		int64_t offset;
+		int64_t size;
+		if (parameters.size() != 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
+		    (size = atoll(parameters[2].c_str())) < 0) {
+			throw duckdb::IOException("Invalid cache source file name: %s", path);
+		}
+		int fd = open(parameters[0].c_str(), O_RDONLY);
+		if (fd == -1) {
+			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
+		}
+		void *const tmp = malloc(size);
+		int64_t bytes_read = pread(fd, tmp, size, 0);
+		if (bytes_read == size) {
+			footer_cache.append((char *)tmp, bytes_read);
+			fprintf(stderr, "Loaded %s: %llu bytes\n", path.c_str(), static_cast<unsigned long long>(bytes_read));
+		}
+		free(tmp);
+		close(fd);
+		if (bytes_read == -1) {
+			throw duckdb::IOException("Could not read from file %s: %s", parameters[0], strerror(errno));
+		}
+		if (bytes_read != size) {
+			throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld", parameters[0],
+			                          size, bytes_read);
+		}
+	}
+
 	std::string footer_cache;
 };
 
@@ -458,8 +494,18 @@ int main(int argc, char *argv[]) {
 #endif
 		}
 	}
+	std::vector<std::string> cachefiles;
+	{
+		const char *env = getenv("Env_cache_files");
+		if (env && env[0]) {
+			cachefiles = duckdb::StringUtil::Split(env, ",");
+		}
+	}
 	const uint64_t start = CurrentMicros();
 	{
+		if (!cachefiles.empty()) {
+			fs.LoadCache(cachefiles.data(), cachefiles.size());
+		}
 		unsigned long long fileid = 0;
 		char tmp[100];
 		JobScheduler scheduler(j, shared);
