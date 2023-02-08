@@ -80,7 +80,7 @@ public:
 		if (fd == -1) {
 			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
-		return duckdb::make_unique<ParquetFooterHandle>(path, fd, offset, size);
+		return duckdb::make_unique<ParquetFooterHandle>(parameters[0], fd, offset, size);
 	}
 
 	int64_t Read(ParquetFooterHandle &handle, void *buffer, size_t buffer_size) {
@@ -131,7 +131,8 @@ public:
 
 	void CloseCurrentDestination() {
 		if (cur_dest) {
-			fprintf(stderr, "%s:0:%llu\n", dests[nxt - 1].c_str(), static_cast<unsigned long long>(cur_dest->pos));
+			fprintf(stderr, "%s:%llu:%llu\n", cur_dest->path.c_str(), static_cast<unsigned long long>(cur_dest->offset),
+			        static_cast<unsigned long long>(cur_dest->pos));
 			delete cur_dest;
 			cur_dest = nullptr;
 		}
@@ -153,7 +154,7 @@ public:
 		if (fd == -1) {
 			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
-		cur_dest = new DestinationHandle(path, fd, offset, size);
+		cur_dest = new DestinationHandle(parameters[0], fd, offset, size);
 		nxt++;
 	}
 
