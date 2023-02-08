@@ -74,11 +74,11 @@ public:
 		int64_t size;
 		if (parameters.size() != 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
 		    (size = atoll(parameters[2].c_str())) < 0) {
-			throw duckdb::IOException("Invalid file name \"%s\"", path);
+			throw duckdb::IOException("Invalid file name %s", path);
 		}
 		int fd = open(parameters[0].c_str(), O_RDONLY);
 		if (fd == -1) {
-			throw duckdb::IOException("Cannot open file \"%s\": %s", path, strerror(errno));
+			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
 		return duckdb::make_unique<ParquetFooterHandle>(path, fd, offset, size);
 	}
@@ -91,10 +91,10 @@ public:
 		}
 		int64_t bytes_read = pread(handle.fd, buffer, footer_size, handle.offset + handle.size - footer_size);
 		if (bytes_read == -1) {
-			throw duckdb::IOException("Could not read from file \"%s\": %s", handle.path, strerror(errno));
+			throw duckdb::IOException("Could not read from file %s: %s", handle.path, strerror(errno));
 		}
 		if (bytes_read != footer_size) {
-			throw duckdb::IOException("Could not read all bytes from file \"%s\": wanted=%lld read=%lld", handle.path,
+			throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld", handle.path,
 			                          footer_size, bytes_read);
 		}
 		return footer_size;
@@ -147,11 +147,11 @@ public:
 		int64_t size;
 		if (parameters.size() != 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
 		    (size = atoll(parameters[2].c_str())) < 0) {
-			throw duckdb::IOException("Invalid file name \"%s\"", path);
+			throw duckdb::IOException("Invalid file name %s", path);
 		}
 		int fd = open(parameters[0].c_str(), O_WRONLY | O_CREAT, 0644);
 		if (fd == -1) {
-			throw duckdb::IOException("Cannot open file \"%s\": %s", path, strerror(errno));
+			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
 		cur_dest = new DestinationHandle(path, fd, offset, size);
 		nxt++;
@@ -168,10 +168,10 @@ public:
 		}
 		int64_t bytes_written = pwrite(cur_dest->fd, buf, footer_size, cur_dest->offset + cur_dest->pos);
 		if (bytes_written == -1) {
-			throw duckdb::IOException("Could not write data to file \"%s\": %s", cur_dest->path, strerror(errno));
+			throw duckdb::IOException("Could not write data to file %s: %s", cur_dest->path, strerror(errno));
 		}
 		if (bytes_written != footer_size) {
-			throw duckdb::IOException("Could not write all bytes to file \"%s\": wanted=%lld read=%lld", cur_dest->path,
+			throw duckdb::IOException("Could not write all bytes to file %s: wanted=%lld read=%lld", cur_dest->path,
 			                          footer_size, bytes_written);
 		}
 		cur_dest->pos += bytes_written;
