@@ -152,7 +152,9 @@ public:
 
 	void LoadCache(const std::string *srcs, size_t n) {
 		for (int i = 0; i < n; i++) {
-			LoadCacheFromSource(srcs[i]);
+			if (!srcs[i].empty()) {
+				LoadCacheFromSource(srcs[i]);
+			}
 		}
 	}
 
