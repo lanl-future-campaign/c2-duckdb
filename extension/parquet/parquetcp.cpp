@@ -195,7 +195,7 @@ private:
 } // namespace
 
 /*
- * Example: ./parquetcp [container:offset:size]
+ * Example: ./parquetcp --from=container:offset:size --to=container:offset:size
  */
 int main(int argc, char *argv[]) {
 	std::vector<std::string> sources, dests;
