@@ -60,8 +60,9 @@
 namespace {
 
 struct DeviceFileWrapper : public duckdb::FileHandle {
-	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, int fd, int64_t offset, int64_t size)
-	    : FileHandle(file_system, path), fd(fd), offset(offset), size(size), reads(0), bytes_read(0) {
+	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, int fd, int64_t offset, int64_t size,
+	                  int64_t id)
+	    : FileHandle(file_system, path), fd(fd), offset(offset), size(size), id(id), reads(0), bytes_read(0) {
 	}
 	~DeviceFileWrapper() override {
 		Close();
@@ -70,6 +71,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	int fd;
 	int64_t offset;
 	int64_t size;
+	int64_t id;
 	uint64_t reads;      // Number of read invocations
 	uint64_t bytes_read; // Number of bytes read from the file
 
@@ -89,7 +91,7 @@ public:
 		std::vector<std::string> parameters = duckdb::StringUtil::Split(path, ":");
 		int64_t offset;
 		int64_t size;
-		if (parameters.size() != 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
+		if (parameters.size() < 3 || (offset = atoll(parameters[1].c_str())) < 0 ||
 		    (size = atoll(parameters[2].c_str())) < 0) {
 			throw duckdb::IOException("Invalid file name \"%s\"", path);
 		}
@@ -97,7 +99,8 @@ public:
 		if (fd == -1) {
 			throw duckdb::IOException("Cannot open file \"%s\": %s", path, strerror(errno));
 		}
-		return duckdb::make_unique<DeviceFileWrapper>(*this, path, fd, offset, size);
+		return duckdb::make_unique<DeviceFileWrapper>(*this, path, fd, offset, size,
+		                                              parameters.size() > 3 ? atoll(parameters[3].c_str()) : -1);
 	}
 
 	int64_t GetFileSize(duckdb::FileHandle &handle) override {
@@ -194,7 +197,6 @@ void JobScheduler::AddTask(const std::string &filename) {
 }
 
 void Run(const std::string &filename, ScanState *const scan, SharedState *const shared) {
-
 	std::unique_ptr<duckdb::FileHandle> file = shared->fs->OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
 	// Obtain a ref to the file before giving it to the reader so that we can collect its statistics later
 	duckdb::FileHandle *const root_file = file.get();
@@ -437,19 +439,25 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	const uint64_t start = CurrentMicros();
-	JobScheduler scheduler(j, shared);
-	for (int i = 6; i < argc; i++) {
-		if (argv[i][0] != '^') {
-			scheduler.AddTask(argv[i]);
-		} else {
-			std::ifstream in(argv[i] + 1);
-			std::string input;
-			while (in >> input) {
-				scheduler.AddTask(input);
+	{
+		unsigned long long fileid = 0;
+		char tmp[100];
+		JobScheduler scheduler(j, shared);
+		for (int i = 6; i < argc; i++) {
+			if (argv[i][0] != '^') {
+				snprintf(tmp, sizeof(tmp), "%s:%llu", argv[i], fileid++);
+				scheduler.AddTask(tmp);
+			} else {
+				std::ifstream in(argv[i] + 1);
+				std::string input;
+				while (in >> input) {
+					snprintf(tmp, sizeof(tmp), "%s:%llu", input.c_str(), fileid++);
+					scheduler.AddTask(tmp);
+				}
 			}
 		}
+		scheduler.Wait();
 	}
-	scheduler.Wait();
 	const uint64_t end = CurrentMicros();
 	if (argc >= 6) {
 		fprintf(stderr, "Predicate: %s%s%s\n", argv[3], argv[4], argv[5]);
