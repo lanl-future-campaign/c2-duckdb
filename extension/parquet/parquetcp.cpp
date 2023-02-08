@@ -130,8 +130,11 @@ public:
 	}
 
 	void CloseCurrentDestination() {
-		delete cur_dest;
-		cur_dest = nullptr;
+		if (cur_dest) {
+			fprintf(stderr, "%s:0:%llu\n", dests[nxt - 1].c_str(), static_cast<unsigned long long>(cur_dest->pos));
+			delete cur_dest;
+			cur_dest = nullptr;
+		}
 	}
 
 	void OpenNextDestination() {
