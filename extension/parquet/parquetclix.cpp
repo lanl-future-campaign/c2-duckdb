@@ -172,7 +172,7 @@ private:
 			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
 		void *const tmp = malloc(size);
-		int64_t bytes_read = pread(fd, tmp, size, 0);
+		int64_t bytes_read = pread(fd, tmp, size, offset);
 		if (bytes_read == size) {
 			footer_cache.append((char *)tmp, bytes_read);
 			fprintf(stderr, "Loaded %s: %llu bytes\n", path.c_str(), static_cast<unsigned long long>(bytes_read));
