@@ -132,7 +132,7 @@ public:
 	}
 
 	std::string GetName() const override {
-		return "ReadonlyFileSystem";
+		return "ReadonlyDeviceFileSystem";
 	}
 };
 
