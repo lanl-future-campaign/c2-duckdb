@@ -348,11 +348,6 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "No columns found that match the query\n");
 	}
 
-	std::vector<idx_t> groups;
-	for (idx_t i = 0; i < reader.NumRowGroups(); i++) {
-		groups.push_back(i);
-	}
-
 	duckdb::TableFilterSet filters;
 	if (argc >= 6) {
 		auto entry = name_map.find(argv[3]);
