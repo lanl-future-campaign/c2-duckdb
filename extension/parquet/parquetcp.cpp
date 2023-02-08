@@ -209,8 +209,20 @@ int main(int argc, char *argv[]) {
 			return -1;
 		}
 	}
+	std::vector<std::string> resolved_dests;
+	for (const auto &dest : dests) {
+		if (dest[0] != '^') {
+			resolved_dests.push_back(dest);
+		} else {
+			std::ifstream in(&dest[1]);
+			std::string input;
+			while (in >> input) {
+				resolved_dests.push_back(input);
+			}
+		}
+	}
 	try {
-		auto replicator = duckdb::make_unique<Replicator>(dests);
+		auto replicator = duckdb::make_unique<Replicator>(resolved_dests);
 		for (const auto &src : sources) {
 			if (src[0] != '^') {
 				replicator->Process(src);
