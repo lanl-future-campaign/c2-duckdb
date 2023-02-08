@@ -111,11 +111,9 @@ public:
 	}
 
 	void Read(duckdb::FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override {
-		if (static_cast<DeviceFileWrapper &>(handle).id >= 0) {
+		if (!FLAGS_disable_cache && static_cast<DeviceFileWrapper &>(handle).id >= 0) {
 			uint64_t footer_cache_offset = static_cast<DeviceFileWrapper &>(handle).id * FLAGS_footer_size;
-			if (FLAGS_disable_cache) {
-				// Skip
-			} else if (location < static_cast<DeviceFileWrapper &>(handle).size - FLAGS_footer_size) {
+			if (location < static_cast<DeviceFileWrapper &>(handle).size - FLAGS_footer_size) {
 				// Non-footer reads
 			} else if (footer_cache.size() < footer_cache_offset + FLAGS_footer_size) {
 				// No cache available
@@ -127,9 +125,8 @@ public:
 				return;
 			}
 		}
-		int fd = static_cast<DeviceFileWrapper &>(handle).fd;
-		int64_t offset = static_cast<DeviceFileWrapper &>(handle).offset;
-		int64_t bytes_read = pread(fd, buffer, nr_bytes, location + offset);
+		int64_t bytes_read = pread(static_cast<DeviceFileWrapper &>(handle).fd, buffer, nr_bytes,
+		                           static_cast<DeviceFileWrapper &>(handle).offset + location);
 		if (bytes_read == -1) {
 			throw duckdb::IOException("Could not read from file %s: %s", handle.path, strerror(errno));
 		}
