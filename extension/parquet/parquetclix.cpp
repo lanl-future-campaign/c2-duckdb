@@ -84,7 +84,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	};
 };
 
-template <uint64_t FLAGS_footer_size = 1 << 10, bool FLAGS_disable_cache = false, bool FLAGS_fadv_random = false>
+template <uint64_t FLAGS_footer_size = 600, bool FLAGS_disable_cache = false, bool FLAGS_fadv_random = false>
 class DeviceFileSystem : public duckdb::FileSystem {
 public:
 	std::unique_ptr<duckdb::FileHandle> OpenFile(const std::string &path, uint8_t flags,
