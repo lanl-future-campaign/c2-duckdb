@@ -84,7 +84,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	};
 };
 
-template <uint64_t FLAGS_footer_size = 1 << 10, bool FLAGS_disable_cache = false>
+template <uint64_t FLAGS_footer_size = 1 << 10, bool FLAGS_disable_cache = false, bool FLAGS_fadv_random = false>
 class DeviceFileSystem : public duckdb::FileSystem {
 public:
 	std::unique_ptr<duckdb::FileHandle> OpenFile(const std::string &path, uint8_t flags,
@@ -99,6 +99,14 @@ public:
 			throw duckdb::IOException("Invalid file name %s", path);
 		}
 		int fd = open(parameters[0].c_str(), O_RDONLY);
+#ifdef __linux__
+		if (FLAGS_fadv_random) {
+			int r = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+			if (r != 0) {
+				throw duckdb::IOException("Fail to invoke posix_fadvise");
+			}
+		}
+#endif
 		if (fd == -1) {
 			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
 		}
