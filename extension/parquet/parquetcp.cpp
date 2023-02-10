@@ -64,7 +64,7 @@ public:
 
 class ParquetFooterReader {
 public:
-	ParquetFooterReader() : default_footer_size(1 << 10) {
+	ParquetFooterReader() : default_footer_size(600) {
 	}
 	~ParquetFooterReader() {};
 
@@ -96,6 +96,11 @@ public:
 		if (bytes_read != footer_size) {
 			throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld", handle.path,
 			                          footer_size, bytes_read);
+		}
+		int64_t actual_size = *reinterpret_cast<uint32_t *>((char *)buffer + footer_size - 8);
+		if (footer_size < actual_size + 8) {
+			throw duckdb::IOException("Footer size larger than expected: expected=%lld, actual=%lld", footer_size,
+			                          actual_size + 8);
 		}
 		return footer_size;
 	}
