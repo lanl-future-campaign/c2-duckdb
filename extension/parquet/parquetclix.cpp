@@ -508,6 +508,7 @@ int main(int argc, char *argv[]) {
 			cachefiles = duckdb::StringUtil::Split(env, ",");
 		}
 	}
+	JobScheduler scheduler(j, shared);
 	const uint64_t start = CurrentMicros();
 	{
 		if (!cachefiles.empty()) {
@@ -515,7 +516,6 @@ int main(int argc, char *argv[]) {
 		}
 		unsigned long long fileid = 0;
 		char tmp[100];
-		JobScheduler scheduler(j, shared);
 		for (int i = 6; i < argc; i++) {
 			if (argv[i][0] != '^') {
 				snprintf(tmp, sizeof(tmp), "%s:%llu", argv[i], fileid++);
