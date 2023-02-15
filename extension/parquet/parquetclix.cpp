@@ -65,7 +65,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, const std::string &fpath,
 	                  int64_t offset, int64_t size, int64_t id)
 	    : FileHandle(file_system, path), fd(-1), fpath(fpath), offset(offset), size(size), id(id), reads(0),
-	      bytes_read(0) {
+	      bytes_read(0), data(nullptr) {
 	}
 	~DeviceFileWrapper() override {
 		Close();
@@ -78,15 +78,20 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 	int64_t id;
 	uint64_t reads;      // Number of read invocations
 	uint64_t bytes_read; // Number of bytes read from the file
+	char *data;
 
 	void Close() override {
+		if (data) {
+			delete[] data;
+		}
 		if (fd != -1) {
 			close(fd);
 		}
 	};
 };
 
-template <uint64_t FLAGS_footer_size = 600, bool FLAGS_disable_cache = false, bool FLAGS_fadv_random = true>
+template <uint64_t FLAGS_footer_size = 600, bool FLAGS_disable_footer_cache = false, bool FLAGS_direct_io = true,
+          bool FLAGS_fadv_random = true, bool FLAGS_prefetch = false>
 class DeviceFileSystem : public duckdb::FileSystem {
 public:
 	std::unique_ptr<duckdb::FileHandle> OpenFile(const std::string &path, uint8_t flags,
@@ -108,8 +113,38 @@ public:
 		return static_cast<DeviceFileWrapper &>(handle).size;
 	}
 
+	inline void OpenFile(duckdb::FileHandle &handle) {
+		if (static_cast<DeviceFileWrapper &>(handle).fd == -1) {
+			int fd;
+#ifdef __linux__
+			if (FLAGS_direct_io) {
+				fd = open(static_cast<DeviceFileWrapper &>(handle).fpath.c_str(), O_RDONLY | O_DIRECT);
+			} else {
+				fd = open(static_cast<DeviceFileWrapper &>(handle).fpath.c_str(), O_RDONLY);
+			}
+			if (fd == -1) {
+				throw duckdb::IOException("Cannot open file %s: %s", static_cast<DeviceFileWrapper &>(handle).fpath,
+				                          strerror(errno));
+			}
+			if (!FLAGS_direct_io && FLAGS_fadv_random) {
+				int r = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+				if (r != 0) {
+					throw duckdb::IOException("Fail to invoke posix_fadvise");
+				}
+			}
+#else
+			fd = open(static_cast<DeviceFileWrapper &>(handle).fpath.c_str(), O_RDONLY);
+			if (fd == -1) {
+				throw duckdb::IOException("Cannot open file %s: %s", static_cast<DeviceFileWrapper &>(handle).fpath,
+				                          strerror(errno));
+			}
+#endif
+			static_cast<DeviceFileWrapper &>(handle).fd = fd;
+		}
+	}
+
 	void Read(duckdb::FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) override {
-		if (!FLAGS_disable_cache && static_cast<DeviceFileWrapper &>(handle).id >= 0) {
+		if (!FLAGS_disable_footer_cache && static_cast<DeviceFileWrapper &>(handle).id >= 0) {
 			uint64_t footer_cache_offset = static_cast<DeviceFileWrapper &>(handle).id * FLAGS_footer_size;
 			if (location < static_cast<DeviceFileWrapper &>(handle).size - FLAGS_footer_size) {
 				// Non-footer reads
@@ -123,21 +158,23 @@ public:
 				return;
 			}
 		}
-		if (static_cast<DeviceFileWrapper &>(handle).fd == -1) {
-			int fd = open(static_cast<DeviceFileWrapper &>(handle).fpath.c_str(), O_RDONLY);
-			if (fd == -1) {
-				throw duckdb::IOException("Cannot open file %s: %s", static_cast<DeviceFileWrapper &>(handle).fpath,
-				                          strerror(errno));
-			}
-#ifdef __linux__
-			if (FLAGS_fadv_random) {
-				int r = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
-				if (r != 0) {
-					throw duckdb::IOException("Fail to invoke posix_fadvise");
+		OpenFile(handle);
+		if (FLAGS_direct_io || FLAGS_prefetch) {
+			if (!static_cast<DeviceFileWrapper &>(handle).data) {
+				static_cast<DeviceFileWrapper &>(handle).data = new char[static_cast<DeviceFileWrapper &>(handle).size];
+				int64_t bytes_read = pread(
+				    static_cast<DeviceFileWrapper &>(handle).fd, static_cast<DeviceFileWrapper &>(handle).data,
+				    static_cast<DeviceFileWrapper &>(handle).size, static_cast<DeviceFileWrapper &>(handle).offset);
+				if (bytes_read == -1) {
+					throw duckdb::IOException("Could not read from file %s: %s", handle.path, strerror(errno));
+				}
+				if (bytes_read != static_cast<DeviceFileWrapper &>(handle).size) {
+					throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld",
+					                          handle.path, static_cast<DeviceFileWrapper &>(handle).size, bytes_read);
 				}
 			}
-#endif
-			static_cast<DeviceFileWrapper &>(handle).fd = fd;
+			memcpy(buffer, static_cast<DeviceFileWrapper &>(handle).data + location, nr_bytes);
+			return;
 		}
 		int64_t bytes_read = pread(static_cast<DeviceFileWrapper &>(handle).fd, buffer, nr_bytes,
 		                           static_cast<DeviceFileWrapper &>(handle).offset + location);
