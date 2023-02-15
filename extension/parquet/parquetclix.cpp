@@ -62,15 +62,17 @@
 namespace {
 
 struct DeviceFileWrapper : public duckdb::FileHandle {
-	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, int fd, int64_t offset, int64_t size,
-	                  int64_t id)
-	    : FileHandle(file_system, path), fd(fd), offset(offset), size(size), id(id), reads(0), bytes_read(0) {
+	DeviceFileWrapper(duckdb::FileSystem &file_system, const std::string &path, const std::string &fpath,
+	                  int64_t offset, int64_t size, int64_t id)
+	    : FileHandle(file_system, path), fd(-1), fpath(fpath), offset(offset), size(size), id(id), reads(0),
+	      bytes_read(0) {
 	}
 	~DeviceFileWrapper() override {
 		Close();
 	}
 
 	int fd;
+	std::string fpath;
 	int64_t offset;
 	int64_t size;
 	int64_t id;
@@ -98,19 +100,7 @@ public:
 		    (size = atoll(parameters[2].c_str())) < 0) {
 			throw duckdb::IOException("Invalid file name %s", path);
 		}
-		int fd = open(parameters[0].c_str(), O_RDONLY);
-#ifdef __linux__
-		if (FLAGS_fadv_random) {
-			int r = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
-			if (r != 0) {
-				throw duckdb::IOException("Fail to invoke posix_fadvise");
-			}
-		}
-#endif
-		if (fd == -1) {
-			throw duckdb::IOException("Cannot open file %s: %s", parameters[0], strerror(errno));
-		}
-		return duckdb::make_unique<DeviceFileWrapper>(*this, path, fd, offset, size,
+		return duckdb::make_unique<DeviceFileWrapper>(*this, path, parameters[0], offset, size,
 		                                              parameters.size() > 3 ? atoll(parameters[3].c_str()) : -1);
 	}
 
@@ -132,6 +122,22 @@ public:
 				       nr_bytes);
 				return;
 			}
+		}
+		if (static_cast<DeviceFileWrapper &>(handle).fd == -1) {
+			int fd = open(static_cast<DeviceFileWrapper &>(handle).fpath.c_str(), O_RDONLY);
+			if (fd == -1) {
+				throw duckdb::IOException("Cannot open file %s: %s", static_cast<DeviceFileWrapper &>(handle).fpath,
+				                          strerror(errno));
+			}
+#ifdef __linux__
+			if (FLAGS_fadv_random) {
+				int r = posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
+				if (r != 0) {
+					throw duckdb::IOException("Fail to invoke posix_fadvise");
+				}
+			}
+#endif
+			static_cast<DeviceFileWrapper &>(handle).fd = fd;
 		}
 		int64_t bytes_read = pread(static_cast<DeviceFileWrapper &>(handle).fd, buffer, nr_bytes,
 		                           static_cast<DeviceFileWrapper &>(handle).offset + location);
