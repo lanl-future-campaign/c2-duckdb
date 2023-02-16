@@ -83,7 +83,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 
 	void Close() override {
 		if (data) {
-			delete[] data;
+			free(data);
 		}
 		if (fd != -1) {
 			close(fd);
@@ -92,7 +92,7 @@ struct DeviceFileWrapper : public duckdb::FileHandle {
 };
 
 template <uint64_t FLAGS_footer_size = 600, bool FLAGS_disable_footer_cache = false, bool FLAGS_direct_io = true,
-          bool FLAGS_fadv_random = true, bool FLAGS_prefetch = false>
+          bool FLAGS_fadv_random = true, bool FLAGS_prefetch = true>
 class DeviceFileSystem : public duckdb::FileSystem {
 public:
 	std::unique_ptr<duckdb::FileHandle> OpenFile(const std::string &path, uint8_t flags,
@@ -162,7 +162,8 @@ public:
 		OpenFile(handle);
 		if (FLAGS_direct_io || FLAGS_prefetch) {
 			if (!static_cast<DeviceFileWrapper &>(handle).data) {
-				static_cast<DeviceFileWrapper &>(handle).data = new char[static_cast<DeviceFileWrapper &>(handle).size];
+				static_cast<DeviceFileWrapper &>(handle).data =
+				    static_cast<char *>(aligned_alloc(4096, static_cast<DeviceFileWrapper &>(handle).size));
 				int64_t bytes_read = pread(
 				    static_cast<DeviceFileWrapper &>(handle).fd, static_cast<DeviceFileWrapper &>(handle).data,
 				    static_cast<DeviceFileWrapper &>(handle).size, static_cast<DeviceFileWrapper &>(handle).offset);
@@ -173,6 +174,8 @@ public:
 					throw duckdb::IOException("Could not read all bytes from file %s: wanted=%lld read=%lld",
 					                          handle.path, static_cast<DeviceFileWrapper &>(handle).size, bytes_read);
 				}
+				static_cast<DeviceFileWrapper &>(handle).bytes_read += bytes_read;
+				static_cast<DeviceFileWrapper &>(handle).reads++;
 			}
 			memcpy(buffer, static_cast<DeviceFileWrapper &>(handle).data + location, nr_bytes);
 			return;
