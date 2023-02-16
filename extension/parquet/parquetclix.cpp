@@ -33,6 +33,7 @@
  */
 #include "duckdb.hpp"
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/printer.hpp"
 #include "duckdb/common/serializer/buffered_serializer.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -431,8 +432,8 @@ int main(int argc, char *argv[]) {
 	std::vector<std::string> column_names = duckdb::StringUtil::Split(argv[2], ",");
 
 	duckdb::Allocator allocator;
-	DeviceFileSystem<> fs;
-	std::unique_ptr<duckdb::FileHandle> file = fs.OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
+	duckdb::LocalFileSystem localfs;
+	std::unique_ptr<duckdb::FileHandle> file = localfs.OpenFile(filename, duckdb::FileFlags::FILE_FLAGS_READ);
 	duckdb::ParquetReader reader(allocator, std::move(file));
 	//-----------------
 	// 0: ID  uint64_t
@@ -504,6 +505,7 @@ int main(int argc, char *argv[]) {
 			sum = atoi(env);
 		}
 	}
+	DeviceFileSystem<> fs;
 	ScanState scan;
 	memset(&scan, 0, sizeof(scan));
 	SharedState shared;
